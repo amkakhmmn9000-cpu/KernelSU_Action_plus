@@ -3,12 +3,12 @@ on:
   workflow_dispatch:
     inputs:
       KERNEL_SOURCE:
-        description: "Kernel source repository URL"
+        description: "Kernel source URL (Git, Google Drive, direct .tar.gz/.zip)"
         required: true
         default: ""
         type: string
       BOOT_IMAGE_SOURCE:
-        description: "Direct URL to stock boot.img"
+        description: "Direct URL to stock boot.img (Google Drive or direct)"
         required: true
         default: ""
         type: string
@@ -95,8 +95,9 @@ jobs:
         echo "BUILD_TIME=$(TZ=Asia/Shanghai date "+%Y%m%d-%H%M")-UTC+8" >> $GITHUB_ENV
         echo "DEVICE=$(echo ${{ env.KERNEL_CONFIG }} | sed 's!vendor/!!;s/_defconfig//;s/_user//;s/-perf//')" >> $GITHUB_ENV
         sudo apt update
-        sudo apt install -y git ccache automake flex lzop bison gperf build-essential zip curl zlib1g-dev g++-multilib libxml2-utils bzip2 libbz2-dev libbz2-1.0 libghc-bzlib-dev squashfs-tools pngcrush schedtool dpkg-dev liblz4-tool make optipng maven libssl-dev pwgen libswitch-perl policycoreutils minicom libxml-sax-base-perl libxml-simple-perl bc libc6-dev-i386 lib32ncurses5-dev libx11-dev lib32z-dev libgl1-mesa-dev xsltproc unzip device-tree-compiler python2 rename
+        sudo apt install -y git ccache automake flex lzop bison gperf build-essential zip curl zlib1g-dev g++-multilib libxml2-utils bzip2 libbz2-dev libbz2-1.0 libghc-bzlib-dev squashfs-tools pngcrush schedtool dpkg-dev liblz4-tool make optipng maven libssl-dev pwgen libswitch-perl policycoreutils minicom libxml-sax-base-perl libxml-simple-perl bc libc6-dev-i386 lib32ncurses5-dev libx11-dev lib32z-dev libgl1-mesa-dev xsltproc unzip device-tree-compiler python2 rename python3-pip
         sudo apt upgrade
+        pip3 install gdown
         mkdir -p $GITHUB_WORKSPACE/kernel_workspace
 
     - name: Set Swap to 10GB
@@ -200,22 +201,74 @@ jobs:
         cd ..
         rm -rf magiskboot
         
-    - name: Download kernel source code
+    - name: Download kernel source code (smart)
       run: |
         cd $GITHUB_WORKSPACE/kernel_workspace
-        if [[ ${{ env.KERNEL_SOURCE }} =~ git ]]; then
-          if [[ ${{ env.KERNEL_SOURCE }} == *'.tar.gz' ]]; then
-            wget -O android-kernel.tar.gz ${{ env.KERNEL_SOURCE }}
-            mkdir android-kernel
-            tar -C android-kernel/ -zxvf android-kernel.tar.gz
-          else
-            git clone ${{ env.KERNEL_SOURCE }} -b ${{ env.KERNEL_SOURCE_BRANCH }} android-kernel --depth=1
-          fi        
+        URL="${{ env.KERNEL_SOURCE }}"
+        echo "Downloading from: $URL"
+        
+        # Function to extract Google Drive file ID
+        extract_gdrive_id() {
+            echo "$1" | grep -oP '(?<=/d/)[^/]+' | head -1
+        }
+        
+        # Case 1: GitHub repository
+        if [[ "$URL" =~ github.com ]]; then
+            echo "Detected GitHub repository. Cloning..."
+            git clone --depth=1 "$URL" android-kernel
+        # Case 2: Google Drive link
+        elif [[ "$URL" =~ drive.google.com ]]; then
+            FILE_ID=$(extract_gdrive_id "$URL")
+            if [ -z "$FILE_ID" ]; then
+                echo "Failed to extract Google Drive file ID."
+                exit 1
+            fi
+            echo "Google Drive file ID: $FILE_ID"
+            # Use gdown to download (handles large files and confirmation page)
+            gdown --fuzzy "https://drive.google.com/file/d/$FILE_ID/view" -O kernel_source.tar.gz
+            # Detect extension and extract
+            if [[ -f kernel_source.tar.gz ]]; then
+                echo "Extracting .tar.gz archive..."
+                mkdir android-kernel
+                tar -xzf kernel_source.tar.gz -C android-kernel
+                rm kernel_source.tar.gz
+            else
+                echo "Download failed or file not found."
+                exit 1
+            fi
+        # Case 3: Direct URL (http/https)
         else
-          wget -O android-kernel.zip ${{ env.KERNEL_SOURCE }}
-          mkdir android-kernel
-          unzip android-kernel.zip -d android-kernel/
+            # Download based on extension
+            if [[ "$URL" == *.tar.gz ]]; then
+                echo "Downloading .tar.gz archive..."
+                wget -O kernel_source.tar.gz "$URL"
+                echo "Extracting..."
+                mkdir android-kernel
+                tar -xzf kernel_source.tar.gz -C android-kernel
+                rm kernel_source.tar.gz
+            elif [[ "$URL" == *.zip ]]; then
+                echo "Downloading .zip archive..."
+                wget -O kernel_source.zip "$URL"
+                echo "Extracting..."
+                mkdir android-kernel
+                unzip -q kernel_source.zip -d android-kernel
+                rm kernel_source.zip
+            else
+                # Assume it's a git repo (fallback)
+                echo "Unknown format, attempting git clone..."
+                git clone --depth=1 "$URL" android-kernel || {
+                    echo "Failed to clone. Please provide a valid Git URL, Google Drive link, or direct .tar.gz/.zip link."
+                    exit 1
+                }
+            fi
         fi
+        
+        # Verify extraction
+        if [ ! -d android-kernel ]; then
+            echo "Error: Kernel source not found after download."
+            exit 1
+        fi
+        echo "Kernel source ready."
 
     - name: Download source boot image file for KernelSU 
       if: env.BUILD_KERNELSU_BOOT_IMG == 'true'
@@ -256,6 +309,62 @@ jobs:
         if [ ${{ env.ADD_OVERLAYFS_CONFIG }} = true ]; then
             echo "CONFIG_OVERLAY_FS=y" >> arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
         fi
+
+    - name: Apply custom kernel config options
+      run: |
+        cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
+        CONFIG_FILE="arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}"
+        echo "Applying custom config options to $CONFIG_FILE"
+        cat << 'EOF' >> $CONFIG_FILE
+        CONFIG_LOCALVERSION="-Khalifa"
+        CONFIG_LOCALVERSION_AUTO=n
+        CONFIG_CC_STACKPROTECTOR_STRONG=n
+        CONFIG_SECURITY_DEFEX=n
+        CONFIG_PROCA=n
+        CONFIG_CPU_FREQ_GOV_PERFORMANCE=y
+        CONFIG_CPU_FREQ_GOV_POWERSAVE=y
+        CONFIG_CPU_FREQ_GOV_USERSPACE=y
+        CONFIG_CPU_FREQ_GOV_ONDEMAND=y
+        CONFIG_CPU_FREQ_GOV_INTERACTIVE=y
+        CONFIG_CPU_FREQ_GOV_CONSERVATIVE=y
+        CONFIG_TIMA=n
+        CONFIG_TIMA_LKMAUTH=n
+        CONFIG_TIMA_LKM_BLOCK=n
+        CONFIG_TIMA_LKMAUTH_CODE_PROT=n
+        CONFIG_UH=n
+        CONFIG_UH_RKP=n
+        CONFIG_RKP_KDP=n
+        CONFIG_RKP_NS_PROT=n
+        CONFIG_RKP_DMAP_PROT=n
+        CONFIG_TIMA_LOG=n
+        CONFIG_KNOX_KAP=n
+        CONFIG_DM_VERITY=n
+        CONFIG_SEC_RESTRICT_ROOTING=n
+        CONFIG_SEC_RESTRICT_SETUID=n
+        CONFIG_SEC_RESTRICT_FORK=n
+        CONFIG_SEC_RESTRICT_ROOTING_LOG=n
+        CONFIG_INTEGRITY=n
+        CONFIG_INTEGRITY_SIGNATURE=y
+        CONFIG_INTEGRITY_ASYMMETRIC_KEYS=n
+        CONFIG_INTEGRITY_TRUSTED_KEYRING=y
+        CONFIG_INTEGRITY_AUDIT=n
+        CONFIG_SECURITY_DSMS=n
+        CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE=y
+        CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE_O3_OFAST_SUB_OPTIONS=y
+        CONFIG_CC_OPTIMIZE_FOR_SIZE=n
+        CONFIG_KNOX_NCM=n
+        CONFIG_ZRAM=y
+        CONFIG_ZRAM_WRITEBACK=y
+        CONFIG_ZRAM_MEMORY_TRACKING=y
+        CONFIG_CRYPTO_LZO=n
+        CONFIG_CRYPTO_LZ4=y
+        CONFIG_KERNEL_GZIP=y
+        CONFIG_MODULE_FORCE_LOAD=y
+        CONFIG_MODULE_UNLOAD=y
+        CONFIG_MODULE_FORCE_UNLOAD=y
+        CONFIG_FIVE=n
+        EOF
+        echo "Custom config options applied."
 
     - name: Setup ccache
       if: env.ENABLE_CCACHE == 'true'
@@ -313,7 +422,15 @@ jobs:
       run: |
         cd $GITHUB_WORKSPACE/kernel_workspace
         mkdir -p boot_img
-        wget -O boot_img/stock_boot.img ${{ env.BOOT_IMAGE_SOURCE }}
+        # Handle Google Drive for boot image as well
+        BOOT_URL="${{ env.BOOT_IMAGE_SOURCE }}"
+        if [[ "$BOOT_URL" =~ drive.google.com ]]; then
+            FILE_ID=$(echo "$BOOT_URL" | grep -oP '(?<=/d/)[^/]+' | head -1)
+            echo "Downloading boot.img from Google Drive (ID: $FILE_ID)"
+            gdown --fuzzy "https://drive.google.com/file/d/$FILE_ID/view" -O boot_img/stock_boot.img
+        else
+            wget -O boot_img/stock_boot.img "$BOOT_URL"
+        fi
         echo "STOCK_BOOT_IMG_PATH=$GITHUB_WORKSPACE/kernel_workspace/boot_img/stock_boot.img" >> $GITHUB_ENV
 
     - name: Setup magiskboot for boot.img repack
@@ -334,7 +451,6 @@ jobs:
         cp $STOCK_BOOT_IMG_PATH boot_work/boot.img
         cd boot_work
         ../tools/magiskboot unpack boot.img
-        # Replace kernel
         cp ../android-kernel/out/arch/${{ env.ARCH }}/boot/${{ env.KERNEL_IMAGE_NAME }} ./kernel
         ../tools/magiskboot repack boot.img new-boot.img
         cp new-boot.img ../boot-custom.img
@@ -346,21 +462,14 @@ jobs:
       run: |
         cd $GITHUB_WORKSPACE/kernel_workspace
         git clone https://github.com/osm0sis/AnyKernel3.git
-        sed -i 's/do.devicecheck=1/do.devicecheck=0/g' AnyKernel3/anykernel.sh
-        sed -i 's!block=/dev/block/platform/omap/omap_hsmmc.0/by-name/boot;!block=auto;!g' AnyKernel3/anykernel.sh
-        sed -i 's/is_slot_device=0;/is_slot_device=auto;/g' AnyKernel3/anykernel.sh
         cp android-kernel/out/arch/${{ env.ARCH }}/boot/${{ env.KERNEL_IMAGE_NAME }} AnyKernel3/
-        if [ ${{ env.CHECK_DTBO_IS_OK }} = true ]; then
-            cp android-kernel/out/arch/${{ env.ARCH }}/boot/dtbo.img AnyKernel3/
-        fi
-        cd ./AnyKernel3/
-        zip -r AnyKernel3 . -x ".git*" -x "README.md" -x "*.zip"
-        if [ -f ./AnyKernel3.zip ]; then
-           echo "AK3_IS_OK=true" >> $GITHUB_ENV
-        else
-           echo "AnyKernel3 output file is empty or broken."
-           exit 1
-        fi
+        cd AnyKernel3
+        sed -i 's/do.devicecheck=1/do.devicecheck=0/g' anykernel.sh
+        sed -i 's!block=/dev/block/platform/omap/omap_hsmmc.0/by-name/boot;!block=auto;!g' anykernel.sh
+        sed -i 's/is_slot_device=0;/is_slot_device=auto;/g' anykernel.sh
+        zip -r9 AnyKernel3.zip * -x .git README.md
+        mv AnyKernel3.zip $GITHUB_WORKSPACE/
+        echo "AK3_IS_OK=true" >> $GITHUB_ENV
 
     - name: Setup KernelSU boot image (legacy)
       if: env.HAVE_KERNELSU_SOURCE_BOOT_IMAGE == 'true' && env.CHECK_FILE_IS_OK == 'true'
@@ -406,7 +515,7 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: AnyKernel3${{ env.UPLOADNAME }}-${{ env.DEVICE }}-${{ env.BUILD_TIME }}
-        path: kernel_workspace/AnyKernel3/AnyKernel3.zip
+        path: AnyKernel3.zip
         if-no-files-found: error
 
     - name: Upload DTBO image
@@ -442,7 +551,7 @@ jobs:
         prerelease: false
         files: |
           kernel_workspace/android-kernel/out/arch/${{ env.ARCH }}/boot/${{ env.KERNEL_IMAGE_NAME }}
-          kernel_workspace/AnyKernel3/AnyKernel3.zip
+          AnyKernel3.zip
           kernel_workspace/android-kernel/out/arch/${{ env.ARCH }}/boot/dtbo.img
           kernel_workspace/bootimg_tmp/boot-kernelsu.img
           kernel_workspace/boot-custom.img
