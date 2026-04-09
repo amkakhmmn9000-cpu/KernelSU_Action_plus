@@ -1,20 +1,71 @@
-name: Build example
+name: Build Kernel with KernelSU
 on:
   push:
   pull_request:
   workflow_dispatch:
     inputs:
       release:
-        description: "Release"
+        description: "Create a GitHub Release"
         required: true
         default: false
         type: boolean
+      KERNEL_SOURCE:
+        description: "Kernel source repository URL"
+        required: true
+        default: "https://github.com/physwizz/A356e"
+        type: string
+      KERNEL_SOURCE_BRANCH:
+        description: "Kernel source branch"
+        required: false
+        default: "main"
+        type: string
+      KERNEL_CONFIG:
+        description: "Defconfig file name"
+        required: true
+        default: "s5e8835-a35xjvxx_defconfig"
+        type: string
+      ARCH:
+        description: "Architecture (arm64, x86_64, etc.)"
+        required: false
+        default: "arm64"
+        type: string
+      KERNEL_IMAGE_NAME:
+        description: "Kernel image name (e.g., Image, Image.gz-dtb)"
+        required: false
+        default: "Image"
+        type: string
+      ENABLE_KERNELSU:
+        description: "Enable KernelSU"
+        required: false
+        default: "true"
+        type: choice
+        options:
+          - "true"
+          - "false"
+      AOSP_CLANG_VERSION:
+        description: "Clang version (e.g., r450784d)"
+        required: false
+        default: "r450784d"
+        type: string
+      BUILD_BOOT_IMG:
+        description: "Build custom boot.img from stock boot image"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "true"
+          - "false"
+      BOOT_IMAGE_SOURCE:
+        description: "Direct URL to stock boot.img (required if BUILD_BOOT_IMG=true)"
+        required: false
+        default: ""
+        type: string
 
 jobs:
   build:
     permissions:
       contents: write
-    name: Build by ${{ github.actor }}
+    name: Build Kernel for ${{ github.actor }}
     runs-on: ubuntu-22.04
     if: github.event.repository.owner.id == github.event.sender.id
     env:
@@ -22,12 +73,16 @@ jobs:
       CCACHE_NOHASHDIR: "true"
       CCACHE_HARDLINK: "true"
     steps:
-    - name: Check out
-      uses: actions/checkout@v3
+    - name: Checkout repository
+      uses: actions/checkout@v4
 
-    - name: Read the configuration
+    - name: Read configuration from config.env
       run: |
         CONFIG_ENV=config.env
+        if [ ! -f "$CONFIG_ENV" ]; then
+          echo "Error: config.env not found!"
+          exit 1
+        fi
         echo "KERNEL_SOURCE=$(cat $CONFIG_ENV | grep -w "KERNEL_SOURCE" | head -n 1 | cut -d "=" -f 2)" >> $GITHUB_ENV
         echo "KERNEL_SOURCE_BRANCH=$(cat $CONFIG_ENV | grep -w "KERNEL_SOURCE_BRANCH" | head -n 1 | cut -d "=" -f 2)" >> $GITHUB_ENV
         echo "KERNEL_CONFIG=$(cat $CONFIG_ENV | grep -w "KERNEL_CONFIG" | head -n 1 | cut -d "=" -f 2)" >> $GITHUB_ENV
@@ -73,7 +128,37 @@ jobs:
         echo "TC_CUSTOM_CMDS=$(cat $CONFIG_ENV | grep -w "TC_CUSTOM_CMDS" | head -n 1 | cut -d ":" -f 2)" >> $GITHUB_ENV
         echo "EXTRA_CMDS=$(cat $CONFIG_ENV | grep -w "EXTRA_CMDS" | head -n 1 | cut -d ":" -f 2)" >> $GITHUB_ENV
 
-    - name: Setting up the kernel compilation environment
+    - name: Override with workflow inputs
+      run: |
+        if [ -n "${{ github.event.inputs.KERNEL_SOURCE }}" ]; then
+          echo "KERNEL_SOURCE=${{ github.event.inputs.KERNEL_SOURCE }}" >> $GITHUB_ENV
+        fi
+        if [ -n "${{ github.event.inputs.KERNEL_SOURCE_BRANCH }}" ]; then
+          echo "KERNEL_SOURCE_BRANCH=${{ github.event.inputs.KERNEL_SOURCE_BRANCH }}" >> $GITHUB_ENV
+        fi
+        if [ -n "${{ github.event.inputs.KERNEL_CONFIG }}" ]; then
+          echo "KERNEL_CONFIG=${{ github.event.inputs.KERNEL_CONFIG }}" >> $GITHUB_ENV
+        fi
+        if [ -n "${{ github.event.inputs.ARCH }}" ]; then
+          echo "ARCH=${{ github.event.inputs.ARCH }}" >> $GITHUB_ENV
+        fi
+        if [ -n "${{ github.event.inputs.KERNEL_IMAGE_NAME }}" ]; then
+          echo "KERNEL_IMAGE_NAME=${{ github.event.inputs.KERNEL_IMAGE_NAME }}" >> $GITHUB_ENV
+        fi
+        if [ -n "${{ github.event.inputs.ENABLE_KERNELSU }}" ]; then
+          echo "ENABLE_KERNELSU=${{ github.event.inputs.ENABLE_KERNELSU }}" >> $GITHUB_ENV
+        fi
+        if [ -n "${{ github.event.inputs.AOSP_CLANG_VERSION }}" ]; then
+          echo "AOSP_CLANG_VERSION=${{ github.event.inputs.AOSP_CLANG_VERSION }}" >> $GITHUB_ENV
+        fi
+        if [ -n "${{ github.event.inputs.BUILD_BOOT_IMG }}" ]; then
+          echo "BUILD_BOOT_IMG=${{ github.event.inputs.BUILD_BOOT_IMG }}" >> $GITHUB_ENV
+        fi
+        if [ -n "${{ github.event.inputs.BOOT_IMAGE_SOURCE }}" ]; then
+          echo "BOOT_IMAGE_SOURCE=${{ github.event.inputs.BOOT_IMAGE_SOURCE }}" >> $GITHUB_ENV
+        fi
+
+    - name: Setup kernel compilation environment
       run: |
         echo "BUILD_TIME=$(TZ=Asia/Shanghai date "+%Y%m%d-%H%M")-UTC+8" >> $GITHUB_ENV
         echo "DEVICE=$(echo ${{ env.KERNEL_CONFIG }} | sed 's!vendor/!!;s/_defconfig//;s/_user//;s/-perf//')" >> $GITHUB_ENV
@@ -183,7 +268,7 @@ jobs:
         cd ..
         rm -rf magiskboot
         
-    - name: Download the kernel source code
+    - name: Download kernel source code
       run: |
         cd $GITHUB_WORKSPACE/kernel_workspace
         if [[ ${{ env.KERNEL_SOURCE }} =~ git ]]; then
@@ -211,7 +296,6 @@ jobs:
             echo "SOURCE_KERNELSU_BOOTIMG_PATH=$GITHUB_WORKSPACE/kernel_workspace/bootimg_tmp/boot-source-kernelsu.img" >> $GITHUB_ENV
         fi
         
-    
     - name: Setup KernelSU
       if: env.ENABLE_KERNELSU == 'true'
       run: |
@@ -219,7 +303,7 @@ jobs:
         curl -LSs "${{ env.KERNELSU_INSTALLER }}" | bash -s ${{ env.KERNELSU_TAG }}
         echo "UPLOADNAME=-KernelSU" >> $GITHUB_ENV
 
-    - name: Setting the kernel compilation configuration
+    - name: Set kernel compilation configuration
       run: |
         cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
         if [ ${{ env.DISABLE-LTO }} = true ]; then
@@ -274,7 +358,7 @@ jobs:
           fi
         fi
 
-    - name: Checking the kernel compilation product
+    - name: Check kernel compilation product
       run: |
        cd $GITHUB_WORKSPACE/kernel_workspace
        if [ -f android-kernel/out/arch/${{ env.ARCH }}/boot/${{ env.KERNEL_IMAGE_NAME }} ]; then
@@ -291,8 +375,41 @@ jobs:
                exit 1
            fi
        fi
+
+    - name: Download stock boot image (for custom boot.img)
+      if: env.BUILD_BOOT_IMG == 'true' && env.BOOT_IMAGE_SOURCE != ''
+      run: |
+        cd $GITHUB_WORKSPACE/kernel_workspace
+        mkdir -p boot_img
+        wget -O boot_img/stock_boot.img ${{ env.BOOT_IMAGE_SOURCE }}
+        echo "STOCK_BOOT_IMG_PATH=$GITHUB_WORKSPACE/kernel_workspace/boot_img/stock_boot.img" >> $GITHUB_ENV
+
+    - name: Setup magiskboot for boot.img repack
+      if: env.BUILD_BOOT_IMG == 'true'
+      run: |
+        cd $GITHUB_WORKSPACE/kernel_workspace
+        mkdir -p tools
+        if [ ! -f tools/magiskboot ]; then
+          wget -O tools/magiskboot https://github.com/topjohnwu/magisk-binaries/raw/master/magiskboot-26.1
+          chmod +x tools/magiskboot
+        fi
+
+    - name: Repack boot.img with new kernel
+      if: env.BUILD_BOOT_IMG == 'true' && env.CHECK_FILE_IS_OK == 'true' && env.BOOT_IMAGE_SOURCE != ''
+      run: |
+        cd $GITHUB_WORKSPACE/kernel_workspace
+        mkdir -p boot_work
+        cp $STOCK_BOOT_IMG_PATH boot_work/boot.img
+        cd boot_work
+        ../tools/magiskboot unpack boot.img
+        # Replace kernel
+        cp ../android-kernel/out/arch/${{ env.ARCH }}/boot/${{ env.KERNEL_IMAGE_NAME }} ./kernel
+        ../tools/magiskboot repack boot.img new-boot.img
+        cp new-boot.img ../boot-custom.img
+        echo "BOOT_IMG_OUT=$GITHUB_WORKSPACE/kernel_workspace/boot-custom.img" >> $GITHUB_ENV
+        echo "BOOT_IMG_BUILT=true" >> $GITHUB_ENV
   
-    - name: Setting up AnyKenrel3
+    - name: Setup AnyKernel3
       if: env.CHECK_FILE_IS_OK == 'true'
       run: |
         cd $GITHUB_WORKSPACE/kernel_workspace
@@ -313,7 +430,7 @@ jobs:
            exit 1
         fi
 
-    - name: Setting up KernelSU boot image
+    - name: Setup KernelSU boot image (legacy)
       if: env.HAVE_KERNELSU_SOURCE_BOOT_IMAGE == 'true' && env.CHECK_FILE_IS_OK == 'true'
       run: |
         cd $GITHUB_WORKSPACE/kernel_workspace
@@ -344,7 +461,7 @@ jobs:
             exit 1
         fi
 
-    - name: Upload ${{ env.KERNEL_IMAGE_NAME }}
+    - name: Upload kernel image (Image)
       if: env.CHECK_FILE_IS_OK == 'true'
       uses: actions/upload-artifact@v4
       with:
@@ -352,7 +469,7 @@ jobs:
         path: kernel_workspace/android-kernel/out/arch/${{ env.ARCH }}/boot/${{ env.KERNEL_IMAGE_NAME }}
         if-no-files-found: error
 
-    - name: Upload AnyKernel3
+    - name: Upload AnyKernel3 package
       if: env.CHECK_FILE_IS_OK == 'true' && env.AK3_IS_OK == 'true'
       uses: actions/upload-artifact@v4
       with:
@@ -368,12 +485,20 @@ jobs:
         path: kernel_workspace/android-kernel/out/arch/${{ env.ARCH }}/boot/dtbo.img
         if-no-files-found: error
 
-    - name: Upload KernelSU boot image
+    - name: Upload KernelSU boot image (legacy)
       if: env.MAKE_KERNELSU_BOOT_IMAGE_IS_OK == 'true'
       uses: actions/upload-artifact@v4
       with:
         name: boot${{ env.UPLOADNAME }}-${{ env.DEVICE }}-${{ env.BUILD_TIME }}
         path: kernel_workspace/bootimg_tmp/boot-kernelsu.img
+        if-no-files-found: error
+
+    - name: Upload custom boot.img (new method)
+      if: env.BOOT_IMG_BUILT == 'true'
+      uses: actions/upload-artifact@v4
+      with:
+        name: boot-custom-${{ env.DEVICE }}-${{ env.BUILD_TIME }}
+        path: kernel_workspace/boot-custom.img
         if-no-files-found: error
 
     - name: Release
@@ -388,5 +513,6 @@ jobs:
           kernel_workspace/AnyKernel3/AnyKernel3.zip
           kernel_workspace/android-kernel/out/arch/${{ env.ARCH }}/boot/dtbo.img
           kernel_workspace/bootimg_tmp/boot-kernelsu.img
+          kernel_workspace/boot-custom.img
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
