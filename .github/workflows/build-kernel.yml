@@ -1,15 +1,17 @@
-Name: Build Kernel with KernelSU (Full-Optimized)
+name: Build Kernel with KernelSU (Full)
 on:
   workflow_dispatch:
     inputs:
       KERNEL_SOURCE:
-        description: "Kernel source URL"
+        description: "Kernel source URL (Git, Google Drive, direct .tar.gz/.zip)"
         required: true
-        default: "https://github.com/physwizz/A356e"
+        default: ""
+        type: string
       BOOT_IMAGE_SOURCE:
-        description: "Direct URL to stock boot.img"
+        description: "Direct URL to stock boot.img (Google Drive or direct)"
         required: false
         default: ""
+        type: string
 
 jobs:
   build:
@@ -23,7 +25,7 @@ jobs:
       CCACHE_NOHASHDIR: "true"
       CCACHE_HARDLINK: "true"
     steps:
-    - name: Checkout repository
+    - name: Checkout repository (to get config.env)
       uses: actions/checkout@v4
 
     - name: Read configuration from config.env
@@ -36,15 +38,26 @@ jobs:
         set -a
         source config.env
         set +a
-        # تصدير كل المتغيرات لبيئة GitHub
+        # Save to GITHUB_ENV
         cat config.env >> $GITHUB_ENV
+
+    - name: Override with workflow inputs
+      run: |
+        if [ -n "${{ github.event.inputs.KERNEL_SOURCE }}" ]; then
+          echo "KERNEL_SOURCE=${{ github.event.inputs.KERNEL_SOURCE }}" >> $GITHUB_ENV
+        fi
+        if [ -n "${{ github.event.inputs.BOOT_IMAGE_SOURCE }}" ]; then
+          echo "BOOT_IMAGE_SOURCE=${{ github.event.inputs.BOOT_IMAGE_SOURCE }}" >> $GITHUB_ENV
+          echo "BUILD_BOOT_IMG=true" >> $GITHUB_ENV
+        fi
 
     - name: Setup kernel compilation environment
       run: |
-        echo "BUILD_TIME=$(TZ=Asia/Shanghai date "+%Y%m%d-%H%M")" >> $GITHUB_ENV
+        echo "BUILD_TIME=$(TZ=Asia/Shanghai date "+%Y%m%d-%H%M")-UTC+8" >> $GITHUB_ENV
         echo "DEVICE=$(echo ${{ env.KERNEL_CONFIG }} | sed 's!vendor/!!;s/_defconfig//;s/_user//;s/-perf//')" >> $GITHUB_ENV
         sudo apt update
-        sudo apt install -y git ccache automake flex lzop bison gperf build-essential zip curl zlib1g-dev g++-multilib libxml2-utils bzip2 libbz2-dev libbz2-1.0 libghc-bzlib-dev squashfs-tools pngcrush schedtool dpkg-dev liblz4-tool make optipng maven libssl-dev pwgen bc libc6-dev-i386 lib32ncurses5-dev libx11-dev lib32z-dev libgl1-mesa-dev xsltproc unzip device-tree-compiler python3 python3-pip
+        sudo apt install -y git ccache automake flex lzop bison gperf build-essential zip curl zlib1g-dev g++-multilib libxml2-utils bzip2 libbz2-dev libbz2-1.0 libghc-bzlib-dev squashfs-tools pngcrush schedtool dpkg-dev liblz4-tool make optipng maven libssl-dev pwgen libswitch-perl policycoreutils minicom libxml-sax-base-perl libxml-simple-perl bc libc6-dev-i386 lib32ncurses5-dev libx11-dev lib32z-dev libgl1-mesa-dev xsltproc unzip device-tree-compiler python2 rename python3-pip
+        sudo apt upgrade -y
         pip3 install gdown
         mkdir -p $GITHUB_WORKSPACE/kernel_workspace
 
@@ -57,39 +70,57 @@ jobs:
       run: |
         cd $GITHUB_WORKSPACE/kernel_workspace
         mkdir clang
-        # الرابط المباشر الصحيح لنسخة Clang r450784d لضمان عدم حدوث 404
-        wget https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/master/clang-r450784d.tar.gz
+        wget https://android.googlesource.com/platform/prebuilts/clang/host/${{ env.AOSP_CLANG_SYSTEM }}/+archive/refs/heads/master/clang-r450784d.tar.gz
         tar -C clang/ -zxvf clang-r450784d.tar.gz
 
-    - name: Download kernel source code (Sparse Checkout)
+    - name: Download AOSP Gcc
+      run: |
+        cd $GITHUB_WORKSPACE/kernel_workspace
+        if [ ${{ env.ENABLE_AOSP_GCC_ARM64 }} = true ]; then
+            mkdir gcc-64
+            wget -O gcc-aarch64.tar.gz https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/+archive/refs/tags/android-12.1.0_r27.tar.gz
+            tar -C ./gcc-64/ -zxvf gcc-aarch64.tar.gz
+            echo "GCC_64=CROSS_COMPILE=$GITHUB_WORKSPACE/kernel_workspace/gcc-64/bin/aarch64-linux-android-" >> $GITHUB_ENV
+        fi
+        if [ ${{ env.ENABLE_AOSP_GCC_ARM32 }} = true ]; then
+            mkdir gcc-32
+            wget -O gcc-arm.tar.gz https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9/+archive/refs/tags/android-12.1.0_r27.tar.gz
+            tar -C ./gcc-32/ -zxvf gcc-arm.tar.gz
+            echo "GCC_32=CROSS_COMPILE_ARM32=$GITHUB_WORKSPACE/kernel_workspace/gcc-32/bin/arm-linux-androideabi-" >> $GITHUB_ENV
+        fi
+
+    - name: Download kernel source code (sparse checkout)
       run: |
         cd $GITHUB_WORKSPACE/kernel_workspace
         git clone --depth=1 --filter=blob:none --sparse ${{ env.KERNEL_SOURCE }} -b ${{ env.KERNEL_SOURCE_BRANCH }} android-kernel
         cd android-kernel
         git sparse-checkout set arch/arm64/configs arch/arm64/boot arch/arm64/kernel arch/arm64/include include Makefile Kconfig scripts kernel drivers fs mm init ipc lib security crypto block certs usr virt android gki sound net samples
 
+    - name: Download magiskboot
+      run: |
+        cd $GITHUB_WORKSPACE/kernel_workspace
+        mkdir tools
+        git clone --recurse-submodules https://github.com/magojohnji/magiskboot-linux.git magiskboot
+        cp magiskboot/x86_64/magiskboot tools/
+        chmod +x tools/magiskboot
+
     - name: Setup KernelSU
       if: env.ENABLE_KERNELSU == 'true'
       run: |
         cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
         curl -LSs "${{ env.KERNELSU_INSTALLER }}" | bash -s ${{ env.KERNELSU_TAG }}
-        echo "UPLOADNAME=-KernelSU" >> $GITHUB_ENV
 
-    - name: Fix Kconfig Syntax & Apply Samsung Bypass
+    - name: Fix Kconfig & Apply Samsung Bypass (The Core Fix)
       run: |
         cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
         CONFIG_FILE="arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}"
         
-        # إصلاح أخطاء المنيو (الصورة الأولى) عبر تنظيف الاستدعاء وإعادة وضعه بشكل صحيح
+        # إصلاح أخطاء Kconfig (حل مشكلة التداخل في الصورة الأولى)
         sed -i '/kernelsu/d' drivers/Kconfig
         echo 'source "drivers/kernelsu/Kconfig"' >> drivers/Kconfig
         
-        # حقن إعدادات تخطي الحماية لمنع البوت لوب
+        # حقن إعدادات تخطي الحماية لمنع البوت لوب (مدمجة مع إعداداتك الأصلية)
         cat << 'EOF' >> $CONFIG_FILE
-        CONFIG_KPROBES=y
-        CONFIG_HAVE_KPROBES=y
-        CONFIG_KPROBE_EVENTS=y
-        CONFIG_OVERLAY_FS=y
         CONFIG_TIMA=n
         CONFIG_UH=n
         CONFIG_UH_RKP=n
@@ -99,8 +130,13 @@ jobs:
         CONFIG_PROCA=n
         CONFIG_SECURITY_DSMS=n
         CONFIG_DM_VERITY=n
-        CONFIG_LOCALVERSION="-Khalifa-A35"
+        CONFIG_KNOX_KAP=n
+        CONFIG_LOCALVERSION="-Khalifa"
         CONFIG_CC_WERROR=n
+        CONFIG_KPROBES=y
+        CONFIG_HAVE_KPROBES=y
+        CONFIG_KPROBE_EVENTS=y
+        CONFIG_OVERLAY_FS=y
         EOF
 
     - name: Build kernel
@@ -108,11 +144,10 @@ jobs:
         cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
         export PATH=$GITHUB_WORKSPACE/kernel_workspace/clang/bin:$PATH
         export KBUILD_BUILD_HOST=${{ env.BUILDER_HOST }}
-        export KBUILD_BUILD_USER=${{ github.actor }}
+        export KBUILD_BUILD_USER=$(echo ${{ github.actor }} | tr A-Z a-z)
         
-        # البناء الرسمي
-        make -j$(nproc --all) CC=clang O=out ARCH=${{ env.ARCH }} ${{ env.TC_CUSTOM_CMDS }} ${{ env.EXTRA_CMDS }} ${{ env.KERNEL_CONFIG }}
-        make -j$(nproc --all) CC=clang O=out ARCH=${{ env.ARCH }} ${{ env.TC_CUSTOM_CMDS }} ${{ env.EXTRA_CMDS }}
+        make -j$(nproc --all) CC=clang O=out ARCH=${{ env.ARCH }} ${{ env.TC_CUSTOM_CMDS }} ${{ env.EXTRA_CMDS }} ${{ env.GCC_64 }} ${{ env.GCC_32 }} ${{ env.KERNEL_CONFIG }}
+        make -j$(nproc --all) CC=clang O=out ARCH=${{ env.ARCH }} ${{ env.TC_CUSTOM_CMDS }} ${{ env.EXTRA_CMDS }} ${{ env.GCC_64 }} ${{ env.GCC_32 }}
 
     - name: Setup AnyKernel3
       run: |
@@ -124,8 +159,8 @@ jobs:
         zip -r9 AnyKernel3.zip *
         mv AnyKernel3.zip $GITHUB_WORKSPACE/
 
-    - name: Upload AnyKernel3 package
+    - name: Upload Artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: AnyKernel3-${{ env.DEVICE }}-${{ env.BUILD_TIME }}
+        name: Kernel-A35-Full-${{ env.BUILD_TIME }}
         path: AnyKernel3.zip
