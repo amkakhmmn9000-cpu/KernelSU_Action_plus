@@ -2,60 +2,14 @@ name: Build Kernel with KernelSU
 on:
   workflow_dispatch:
     inputs:
-      release:
-        description: "Create a GitHub Release"
-        required: true
-        default: false
-        type: boolean
       KERNEL_SOURCE:
         description: "Kernel source repository URL"
         required: true
         default: ""
         type: string
-      KERNEL_SOURCE_BRANCH:
-        description: "Kernel source branch"
-        required: false
-        default: "main"
-        type: string
-      KERNEL_CONFIG:
-        description: "Defconfig file name"
-        required: true
-        default: "s5e8835-a35xjvxx_defconfig"
-        type: string
-      ARCH:
-        description: "Architecture (arm64, x86_64, etc.)"
-        required: false
-        default: "arm64"
-        type: string
-      KERNEL_IMAGE_NAME:
-        description: "Kernel image name (e.g., Image, Image.gz-dtb)"
-        required: false
-        default: "Image"
-        type: string
-      ENABLE_KERNELSU:
-        description: "Enable KernelSU"
-        required: false
-        default: "true"
-        type: choice
-        options:
-          - "true"
-          - "false"
-      AOSP_CLANG_VERSION:
-        description: "Clang version (e.g., r450784d)"
-        required: false
-        default: "r450784d"
-        type: string
-      BUILD_BOOT_IMG:
-        description: "Build custom boot.img from stock boot image"
-        required: false
-        default: "false"
-        type: choice
-        options:
-          - "true"
-          - "false"
       BOOT_IMAGE_SOURCE:
-        description: "Direct URL to stock boot.img (required if BUILD_BOOT_IMG=true)"
-        required: false
+        description: "Direct URL to stock boot.img"
+        required: true
         default: ""
         type: string
 
@@ -131,29 +85,9 @@ jobs:
         if [ -n "${{ github.event.inputs.KERNEL_SOURCE }}" ]; then
           echo "KERNEL_SOURCE=${{ github.event.inputs.KERNEL_SOURCE }}" >> $GITHUB_ENV
         fi
-        if [ -n "${{ github.event.inputs.KERNEL_SOURCE_BRANCH }}" ]; then
-          echo "KERNEL_SOURCE_BRANCH=${{ github.event.inputs.KERNEL_SOURCE_BRANCH }}" >> $GITHUB_ENV
-        fi
-        if [ -n "${{ github.event.inputs.KERNEL_CONFIG }}" ]; then
-          echo "KERNEL_CONFIG=${{ github.event.inputs.KERNEL_CONFIG }}" >> $GITHUB_ENV
-        fi
-        if [ -n "${{ github.event.inputs.ARCH }}" ]; then
-          echo "ARCH=${{ github.event.inputs.ARCH }}" >> $GITHUB_ENV
-        fi
-        if [ -n "${{ github.event.inputs.KERNEL_IMAGE_NAME }}" ]; then
-          echo "KERNEL_IMAGE_NAME=${{ github.event.inputs.KERNEL_IMAGE_NAME }}" >> $GITHUB_ENV
-        fi
-        if [ -n "${{ github.event.inputs.ENABLE_KERNELSU }}" ]; then
-          echo "ENABLE_KERNELSU=${{ github.event.inputs.ENABLE_KERNELSU }}" >> $GITHUB_ENV
-        fi
-        if [ -n "${{ github.event.inputs.AOSP_CLANG_VERSION }}" ]; then
-          echo "AOSP_CLANG_VERSION=${{ github.event.inputs.AOSP_CLANG_VERSION }}" >> $GITHUB_ENV
-        fi
-        if [ -n "${{ github.event.inputs.BUILD_BOOT_IMG }}" ]; then
-          echo "BUILD_BOOT_IMG=${{ github.event.inputs.BUILD_BOOT_IMG }}" >> $GITHUB_ENV
-        fi
         if [ -n "${{ github.event.inputs.BOOT_IMAGE_SOURCE }}" ]; then
           echo "BOOT_IMAGE_SOURCE=${{ github.event.inputs.BOOT_IMAGE_SOURCE }}" >> $GITHUB_ENV
+          echo "BUILD_BOOT_IMG=true" >> $GITHUB_ENV
         fi
 
     - name: Setup kernel compilation environment
@@ -256,7 +190,7 @@ jobs:
         fi
 
     - name: Download magiskboot
-      if: env.BUILD_KERNELSU_BOOT_IMG == 'true'
+      if: env.BUILD_BOOT_IMG == 'true'
       run: |
         cd $GITHUB_WORKSPACE/kernel_workspace
         mkdir tools
