@@ -1,7 +1,5 @@
 name: Build Kernel with KernelSU
 on:
-  push:
-  pull_request:
   workflow_dispatch:
     inputs:
       release:
@@ -12,7 +10,7 @@ on:
       KERNEL_SOURCE:
         description: "Kernel source repository URL"
         required: true
-        default: "https://github.com/physwizz/A356e"
+        default: ""
         type: string
       KERNEL_SOURCE_BRANCH:
         description: "Kernel source branch"
