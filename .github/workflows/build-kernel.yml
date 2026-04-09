@@ -1,17 +1,15 @@
-name: Build Kernel with KernelSU (Full)
+name: Build Kernel with KernelSU (Full-Optimized)
 on:
   workflow_dispatch:
     inputs:
       KERNEL_SOURCE:
-        description: "Kernel source URL (Git, Google Drive, direct .tar.gz/.zip)"
+        description: "Kernel source URL"
         required: true
-        default: ""
-        type: string
+        default: "https://github.com/physwizz/A356e"
       BOOT_IMAGE_SOURCE:
-        description: "Direct URL to stock boot.img (Google Drive or direct)"
+        description: "Direct URL to stock boot.img"
         required: false
         default: ""
-        type: string
 
 jobs:
   build:
@@ -25,539 +23,107 @@ jobs:
       CCACHE_NOHASHDIR: "true"
       CCACHE_HARDLINK: "true"
     steps:
-    - name: Checkout repository (to get config.env)
+    - name: Checkout repository
       uses: actions/checkout@v4
 
     - name: Read configuration from config.env
       run: |
-        CONFIG_ENV=config.env
-        if [ ! -f "$CONFIG_ENV" ]; then
-          echo "Error: config.env not found!"
-          exit 1
-        fi
-        # Export all variables from config.env
+        if [ ! -f "config.env" ]; then echo "Error: config.env not found!"; exit 1; fi
         set -a
         source config.env
         set +a
-        # Save to GITHUB_ENV
-        echo "KERNEL_SOURCE=$KERNEL_SOURCE" >> $GITHUB_ENV
-        echo "KERNEL_SOURCE_BRANCH=$KERNEL_SOURCE_BRANCH" >> $GITHUB_ENV
-        echo "KERNEL_CONFIG=$KERNEL_CONFIG" >> $GITHUB_ENV
-        echo "KERNEL_IMAGE_NAME=$KERNEL_IMAGE_NAME" >> $GITHUB_ENV
-        echo "ARCH=$ARCH" >> $GITHUB_ENV
-        echo "ENABLE_CLANG=$ENABLE_CLANG" >> $GITHUB_ENV
-        echo "USE_AOSP_CLANG=$USE_AOSP_CLANG" >> $GITHUB_ENV
-        echo "AOSP_CLANG_SYSTEM=$AOSP_CLANG_SYSTEM" >> $GITHUB_ENV
-        echo "AOSP_CLANG_BRANCH=$AOSP_CLANG_BRANCH" >> $GITHUB_ENV
-        echo "AOSP_CLANG_VERSION=$AOSP_CLANG_VERSION" >> $GITHUB_ENV
-        echo "USE_CUSTOM_CLANG=$USE_CUSTOM_CLANG" >> $GITHUB_ENV
-        echo "CUSTOM_CLANG_SOURCE=$CUSTOM_CLANG_SOURCE" >> $GITHUB_ENV
-        echo "CUSTOM_CLANG_BRANCH=$CUSTOM_CLANG_BRANCH" >> $GITHUB_ENV
-        echo "ENABLE_GCC=$ENABLE_GCC" >> $GITHUB_ENV
-        echo "ENABLE_AOSP_GCC_ARM64=$ENABLE_AOSP_GCC_ARM64" >> $GITHUB_ENV
-        echo "ENABLE_AOSP_GCC_ARM32=$ENABLE_AOSP_GCC_ARM32" >> $GITHUB_ENV
-        echo "AOSP_GCC_SYSTEM=$AOSP_GCC_SYSTEM" >> $GITHUB_ENV
-        echo "AOSP_GCC_ARM64_VERSION=$AOSP_GCC_ARM64_VERSION" >> $GITHUB_ENV
-        echo "AOSP_GCC_ARM32_VERSION=$AOSP_GCC_ARM32_VERSION" >> $GITHUB_ENV
-        echo "AOSP_GCC_ANDROID_VERSION=$AOSP_GCC_ANDROID_VERSION" >> $GITHUB_ENV
-        echo "AOSP_GCC_RELEASE=$AOSP_GCC_RELEASE" >> $GITHUB_ENV
-        echo "USE_CUSTOM_GCC_64=$USE_CUSTOM_GCC_64" >> $GITHUB_ENV
-        echo "CUSTOM_GCC_64_SOURCE=$CUSTOM_GCC_64_SOURCE" >> $GITHUB_ENV
-        echo "CUSTOM_GCC_64_BRANCH=$CUSTOM_GCC_64_BRANCH" >> $GITHUB_ENV
-        echo "CUSTOM_GCC_64_BIN=$CUSTOM_GCC_64_BIN" >> $GITHUB_ENV
-        echo "CUSTOM_GCC_32_SOURCE=$CUSTOM_GCC_32_SOURCE" >> $GITHUB_ENV
-        echo "CUSTOM_GCC_32_BRANCH=$CUSTOM_GCC_32_BRANCH" >> $GITHUB_ENV
-        echo "CUSTOM_GCC_32_BIN=$CUSTOM_GCC_32_BIN" >> $GITHUB_ENV
-        echo "ENABLE_KERNELSU=$ENABLE_KERNELSU" >> $GITHUB_ENV
-        echo "KERNELSU_INSTALLER=$KERNELSU_INSTALLER" >> $GITHUB_ENV
-        echo "KERNELSU_TAG=$KERNELSU_TAG" >> $GITHUB_ENV
-        echo "KSU_EXPECTED_SIZE=$KSU_EXPECTED_SIZE" >> $GITHUB_ENV
-        echo "KSU_EXPECTED_HASH=$KSU_EXPECTED_HASH" >> $GITHUB_ENV
-        echo "BUILD_KERNELSU_BOOT_IMG=$BUILD_KERNELSU_BOOT_IMG" >> $GITHUB_ENV
-        echo "KERNELSU_SOURCE_BOOT_IMAGE=$KERNELSU_SOURCE_BOOT_IMAGE" >> $GITHUB_ENV
-        echo "DISABLE-LTO=$DISABLE_LTO" >> $GITHUB_ENV
-        echo "DISABLE_CC_WERROR=$DISABLE_CC_WERROR" >> $GITHUB_ENV
-        echo "ADD_KPROBES_CONFIG=$ADD_KPROBES_CONFIG" >> $GITHUB_ENV
-        echo "ADD_OVERLAYFS_CONFIG=$ADD_OVERLAYFS_CONFIG" >> $GITHUB_ENV
-        echo "ENABLE_CCACHE=$ENABLE_CCACHE" >> $GITHUB_ENV
-        echo "NEED_DTBO=$NEED_DTBO" >> $GITHUB_ENV
-        echo "BUILDER_HOST=$BUILDER_HOST" >> $GITHUB_ENV
-        echo "TC_CUSTOM_CMDS=$TC_CUSTOM_CMDS" >> $GITHUB_ENV
-        echo "EXTRA_CMDS=$EXTRA_CMDS" >> $GITHUB_ENV
+        # تصدير المتغيرات للبيئة
+        cat config.env >> $GITHUB_ENV
 
-    - name: Override with workflow inputs
+    - name: Setup compilation environment
       run: |
-        if [ -n "${{ github.event.inputs.KERNEL_SOURCE }}" ]; then
-          echo "KERNEL_SOURCE=${{ github.event.inputs.KERNEL_SOURCE }}" >> $GITHUB_ENV
-        fi
-        if [ -n "${{ github.event.inputs.BOOT_IMAGE_SOURCE }}" ]; then
-          echo "BOOT_IMAGE_SOURCE=${{ github.event.inputs.BOOT_IMAGE_SOURCE }}" >> $GITHUB_ENV
-          echo "BUILD_BOOT_IMG=true" >> $GITHUB_ENV
-        fi
-
-    - name: Setup kernel compilation environment
-      run: |
-        echo "BUILD_TIME=$(TZ=Asia/Shanghai date "+%Y%m%d-%H%M")-UTC+8" >> $GITHUB_ENV
-        echo "DEVICE=$(echo ${{ env.KERNEL_CONFIG }} | sed 's!vendor/!!;s/_defconfig//;s/_user//;s/-perf//')" >> $GITHUB_ENV
-        sudo apt update
-        sudo apt install -y git ccache automake flex lzop bison gperf build-essential zip curl zlib1g-dev g++-multilib libxml2-utils bzip2 libbz2-dev libbz2-1.0 libghc-bzlib-dev squashfs-tools pngcrush schedtool dpkg-dev liblz4-tool make optipng maven libssl-dev pwgen libswitch-perl policycoreutils minicom libxml-sax-base-perl libxml-simple-perl bc libc6-dev-i386 lib32ncurses5-dev libx11-dev lib32z-dev libgl1-mesa-dev xsltproc unzip device-tree-compiler python2 rename python3-pip
-        sudo apt upgrade
+        echo "BUILD_TIME=$(TZ=Asia/Shanghai date "+%Y%m%d-%H%M")" >> $GITHUB_ENV
+        sudo apt update && sudo apt install -y git ccache automake flex lzop bison gperf build-essential zip curl zlib1g-dev g++-multilib libxml2-utils bzip2 libbz2-dev libbz2-1.0 libghc-bzlib-dev squashfs-tools pngcrush schedtool dpkg-dev liblz4-tool make optipng maven libssl-dev pwgen bc libc6-dev-i386 lib32ncurses5-dev libx11-dev lib32z-dev libgl1-mesa-dev xsltproc unzip device-tree-compiler python3 python3-pip
         pip3 install gdown
-        mkdir -p $GITHUB_WORKSPACE/kernel_workspace
+        mkdir -p kernel_workspace
 
-    - name: Set Swap to 10GB
+    - name: Set Swap space
       uses: pierotofy/set-swap-space@master
       with:
         swap-size-gb: 10
 
-    - name: Cache Clang
-      id: cache-clang
-      uses: actions/cache@v4
-      with:
-        path: kernel_workspace/clang
-        key: clang-${{ env.AOSP_CLANG_VERSION }}
-
-    - name: Download AOSP Clang
-      if: env.ENABLE_CLANG == 'true' && env.USE_AOSP_CLANG == 'true' && env.USE_CUSTOM_CLANG == 'false' && steps.cache-clang.outputs.cache-hit != 'true'
+    - name: Download Clang
       run: |
-        cd $GITHUB_WORKSPACE/kernel_workspace
+        cd kernel_workspace
         mkdir clang
         wget https://android.googlesource.com/platform/prebuilts/clang/host/${{ env.AOSP_CLANG_SYSTEM }}/+archive/4bb6424cb1615af408ae80871131f4da8c4ddadf/clang-${{ env.AOSP_CLANG_VERSION }}.tar.gz
         tar -C clang/ -zxvf clang-${{ env.AOSP_CLANG_VERSION }}.tar.gz
-        rm -rf clang-${{ env.AOSP_CLANG_VERSION }}.tar.gz
 
-    - name: Download Custom Clang
-      if: env.ENABLE_CLANG == 'true' && env.USE_AOSP_CLANG == 'false' && env.USE_CUSTOM_CLANG == 'true'
+    - name: Download Kernel Source
       run: |
-        cd $GITHUB_WORKSPACE/kernel_workspace
-        if [[ ${{ env.CUSTOM_CLANG_SOURCE }} =~ git ]]; then
-            if [[ ${{ env.CUSTOM_CLANG_SOURCE }} == *'.tar.gz' ]]; then
-                wget -O clang.tar.gz ${{ env.CUSTOM_CLANG_SOURCE }}
-                mkdir clang
-                tar -C clang/ -zxvf clang.tar.gz
-                rm -rf clang.tar.gz
-            else
-                git clone ${{ env.CUSTOM_CLANG_SOURCE }} -b ${{ env.CUSTOM_CLANG_BRANCH }} clang --depth=1
-            fi        
-        else
-            wget -O clang.zip ${{ env.CUSTOM_CLANG_SOURCE }}
-            mkdir clang
-            unzip clang.zip -d clang/
-            rm -rf clang.zip
-        fi
+        cd kernel_workspace
+        git clone --depth=1 ${{ env.KERNEL_SOURCE }} -b ${{ env.KERNEL_SOURCE_BRANCH }} android-kernel
 
-    - name: Download AOSP Gcc
-      if: env.USE_CUSTOM_GCC_64 == 'false' || env.USE_CUSTOM_GCC_32 == 'false' && env.ENABLE_GCC == 'true' 
-      run: |
-        cd $GITHUB_WORKSPACE/kernel_workspace
-        if [ ${{ env.ENABLE_AOSP_GCC_ARM64 }} = true ]; then
-            mkdir gcc-64
-            wget -O gcc-aarch64.tar.gz https://android.googlesource.com/platform/prebuilts/gcc/${{ env.AOSP_GCC_SYSTEM }}/aarch64/${{ env.AOSP_GCC_ARM64_VERSION }}/+archive/refs/tags/android-${{ env.AOSP_GCC_ANDROID_VERSION }}_${{ env.AOSP_GCC_RELEASE }}.tar.gz
-            tar -C ./gcc-64/ -zxvf gcc-aarch64.tar.gz
-            echo "GCC_64=CROSS_COMPILE=$GITHUB_WORKSPACE/kernel_workspace/gcc-64/bin/aarch64-linux-android-" >> $GITHUB_ENV
-        fi
-
-        if [ ${{ env.ENABLE_AOSP_GCC_ARM32 }} = true ]; then
-            mkdir gcc-32
-            wget -O gcc-arm.tar.gz https://android.googlesource.com/platform/prebuilts/gcc/${{ env.AOSP_GCC_SYSTEM }}/arm/${{ env.AOSP_GCC_ARM32_VERSION }}/+archive/refs/tags/android-${{ env.AOSP_GCC_ANDROID_VERSION }}_${{ env.AOSP_GCC_RELEASE }}.tar.gz
-            tar -C ./gcc-32/ -zxvf gcc-arm.tar.gz
-            echo "GCC_32=CROSS_COMPILE_ARM32=$GITHUB_WORKSPACE/kernel_workspace/gcc-32/bin/arm-linux-androideabi-" >> $GITHUB_ENV
-        fi
-
-    - name: Download Custom Gcc
-      if: env.USE_CUSTOM_GCC_64 == 'true' || env.USE_CUSTOM_GCC_32 == 'true' && env.ENABLE_GCC == 'true' 
-      run: |
-        cd $GITHUB_WORKSPACE/kernel_workspace
-        if [ ${{ env.USE_CUSTOM_GCC_64 }} = true ]; then
-          if [[ ${{ env.CUSTOM_GCC_64_SOURCE }} =~ git ]]; then
-              if [[ ${{ env.CUSTOM_GCC_64_SOURCE }} == *'.tar.gz' ]]; then
-                wget -O gcc-64.tar.gz ${{ env.CUSTOM_CLANG_SOURCE }}
-                mkdir gcc-64
-                tar -C gcc-64/ -zxvf gcc-64.tar.gz
-              else
-                git clone ${{ env.CUSTOM_GCC_64_SOURCE }} -b ${{ env.CUSTOM_GCC_64_BRANCH }} gcc-64 --depth=1
-              fi
-          else
-              wget -O gcc-64.zip ${{ env.CUSTOM_GCC_64_SOURCE }}
-              mkdir gcc-64
-              unzip gcc-64.zip -d gcc-64/
-          fi
-          echo "GCC_64=CROSS_COMPILE=$GITHUB_WORKSPACE/kernel_workspace/gcc-64/bin/${{ env.CUSTOM_GCC_64_BIN }}" >> $GITHUB_ENV
-        fi
-
-        if [ ${{ env.USE_CUSTOM_GCC_32 }} = true ]; then
-          if [[ ${{ env.CUSTOM_GCC_32_SOURCE }} =~ git ]]; then
-              if [[ ${{ env.CUSTOM_GCC_32_SOURCE }} == *'.tar.gz' ]]; then
-                wget -O gcc-32.tar.gz ${{ env.CUSTOM_CLANG_SOURCE }}
-                mkdir gcc-32
-                tar -C gcc-32/ -zxvf gcc-32.tar.gz
-              else
-                git clone ${{ env.CUSTOM_GCC_32_SOURCE }} -b ${{ env.CUSTOM_GCC_32_BRANCH }} gcc-32 --depth=1
-              fi
-          else
-            wget -O gcc-32.zip ${{ env.CUSTOM_GCC_32_SOURCE }}
-            mkdir gcc-32
-            unzip gcc-32.zip -d gcc-32/
-          fi
-          echo "GCC_32=CROSS_COMPILE=$GITHUB_WORKSPACE/kernel_workspace/gcc-32/bin/${{ env.CUSTOM_GCC_32_BIN }}" >> $GITHUB_ENV
-        fi
-
-    - name: Download magiskboot
-      if: env.BUILD_BOOT_IMG == 'true'
-      run: |
-        cd $GITHUB_WORKSPACE/kernel_workspace
-        mkdir tools
-        git clone --recurse-submodules https://github.com/magojohnji/magiskboot-linux.git magiskboot
-        cd magiskboot
-        cp ./x86_64/magiskboot ../tools/
-        cd ..
-        rm -rf magiskboot
-
-    - name: Download kernel source code (smart with sparse checkout)
-      run: |
-        cd $GITHUB_WORKSPACE/kernel_workspace
-        URL="${{ env.KERNEL_SOURCE }}"
-        echo "Downloading from: $URL"
-        
-        extract_gdrive_id() {
-            echo "$1" | grep -oP '(?<=/d/)[^/]+' | head -1
-        }
-        
-        if [[ "$URL" =~ github.com ]]; then
-            echo "Detected GitHub repository. Cloning with sparse checkout..."
-            git clone --depth=1 --filter=blob:none --sparse "$URL" android-kernel
-            cd android-kernel
-            git sparse-checkout set arch/arm64/configs arch/arm64/boot arch/arm64/kernel arch/arm64/include include Makefile Kconfig scripts kernel drivers fs mm init ipc lib security crypto block certs usr virt android gki sound net samples
-        elif [[ "$URL" =~ drive.google.com ]]; then
-            FILE_ID=$(extract_gdrive_id "$URL")
-            if [ -z "$FILE_ID" ]; then
-                echo "Failed to extract Google Drive file ID."
-                exit 1
-            fi
-            echo "Google Drive file ID: $FILE_ID"
-            gdown --fuzzy "https://drive.google.com/file/d/$FILE_ID/view" -O kernel_source.tar.gz
-            if [[ -f kernel_source.tar.gz ]]; then
-                echo "Extracting .tar.gz archive..."
-                mkdir android-kernel
-                tar -xzf kernel_source.tar.gz -C android-kernel
-                rm kernel_source.tar.gz
-            else
-                echo "Download failed or file not found."
-                exit 1
-            fi
-        else
-            if [[ "$URL" == *.tar.gz ]]; then
-                echo "Downloading .tar.gz archive..."
-                wget -O kernel_source.tar.gz "$URL"
-                mkdir android-kernel
-                tar -xzf kernel_source.tar.gz -C android-kernel
-                rm kernel_source.tar.gz
-            elif [[ "$URL" == *.zip ]]; then
-                echo "Downloading .zip archive..."
-                wget -O kernel_source.zip "$URL"
-                mkdir android-kernel
-                unzip -q kernel_source.zip -d android-kernel
-                rm kernel_source.zip
-            else
-                echo "Unknown format, attempting git clone with sparse..."
-                git clone --depth=1 --filter=blob:none --sparse "$URL" android-kernel || {
-                    echo "Failed to clone. Please provide a valid Git URL, Google Drive link, or direct .tar.gz/.zip link."
-                    exit 1
-                }
-                cd android-kernel
-                git sparse-checkout set arch/arm64/configs arch/arm64/boot arch/arm64/kernel arch/arm64/include include Makefile Kconfig scripts kernel drivers fs mm init ipc lib security crypto block certs usr virt android gki sound net samples
-            fi
-        fi
-        
-        if [ ! -d android-kernel ]; then
-            echo "Error: Kernel source not found after download."
-            exit 1
-        fi
-        echo "Kernel source ready."
-
-    - name: Download source boot image file for KernelSU 
-      if: env.BUILD_KERNELSU_BOOT_IMG == 'true'
-      run: |
-        cd $GITHUB_WORKSPACE/kernel_workspace
-        mkdir bootimg_tmp
-        wget -O ./bootimg_tmp/boot-source-kernelsu.img ${{ env.KERNELSU_SOURCE_BOOT_IMAGE }}
-        if [ -f ./bootimg_tmp/boot-source-kernelsu.img ]; then
-            echo "HAVE_KERNELSU_SOURCE_BOOT_IMAGE=true" >> $GITHUB_ENV
-            echo "SOURCE_KERNELSU_BOOTIMG_PATH=$GITHUB_WORKSPACE/kernel_workspace/bootimg_tmp/boot-source-kernelsu.img" >> $GITHUB_ENV
-        fi
-        
     - name: Setup KernelSU
       if: env.ENABLE_KERNELSU == 'true'
       run: |
-        cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
+        cd kernel_workspace/android-kernel
         curl -LSs "${{ env.KERNELSU_INSTALLER }}" | bash -s ${{ env.KERNELSU_TAG }}
         echo "UPLOADNAME=-KernelSU" >> $GITHUB_ENV
 
-    - name: Set kernel compilation configuration
+    - name: Fix Kconfig Syntax & Apply Anti-Bootloop
       run: |
-        cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
-        if [ "${{ env.DISABLE-LTO }}" = "true" ]; then
-            sed -i 's/CONFIG_LTO=y/CONFIG_LTO=n/' arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
-            sed -i 's/CONFIG_LTO_CLANG=y/CONFIG_LTO_CLANG=n/' arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
-            sed -i 's/CONFIG_THINLTO=y/CONFIG_THINLTO=n/' arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
-            echo "CONFIG_LTO_NONE=y" >> arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
-        fi
-        if [ "${{ env.DISABLE_CC_WERROR }}" = "true" ]; then
-            echo "CONFIG_CC_WERROR=n" >> arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
-        fi
-        if [ "${{ env.ADD_KPROBES_CONFIG }}" = "true" ]; then
-            echo "CONFIG_MODULES=y" >> arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
-            echo "CONFIG_KPROBES=y" >> arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
-            echo "CONFIG_HAVE_KPROBES=y" >> arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
-            echo "CONFIG_KPROBE_EVENTS=y" >> arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
-        fi
-        if [ "${{ env.ADD_OVERLAYFS_CONFIG }}" = "true" ]; then
-            echo "CONFIG_OVERLAY_FS=y" >> arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
-        fi
-
-    - name: Apply custom kernel config options (from user)
-      run: |
-        cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
+        cd kernel_workspace/android-kernel
         CONFIG_FILE="arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}"
-        echo "Applying custom config options to $CONFIG_FILE"
+        
+        # 1. إصلاح أخطاء Kconfig التي ظهرت في الصورة (تداخل الـ menu)
+        # نقوم بإضافة السورس الخاص بـ KernelSU في مكان آمن يدوياً
+        sed -i '/menu "Device Drivers"/a source "drivers/kernelsu/Kconfig"' drivers/Kconfig
+        
+        # 2. حقن إعدادات تخطي حمايات سامسونج ومنع تعليق الشعار
         cat << 'EOF' >> $CONFIG_FILE
-        CONFIG_LOCALVERSION="-Khalifa"
-        CONFIG_LOCALVERSION_AUTO=n
-        CONFIG_CC_STACKPROTECTOR_STRONG=n
-        CONFIG_SECURITY_DEFEX=n
-        CONFIG_PROCA=n
-        CONFIG_CPU_FREQ_GOV_PERFORMANCE=y
-        CONFIG_CPU_FREQ_GOV_POWERSAVE=y
-        CONFIG_CPU_FREQ_GOV_USERSPACE=y
-        CONFIG_CPU_FREQ_GOV_ONDEMAND=y
-        CONFIG_CPU_FREQ_GOV_INTERACTIVE=y
-        CONFIG_CPU_FREQ_GOV_CONSERVATIVE=y
+        # KernelSU Requirements
+        CONFIG_KPROBES=y
+        CONFIG_HAVE_KPROBES=y
+        CONFIG_KPROBE_EVENTS=y
+        CONFIG_OVERLAY_FS=y
+        
+        # Samsung Knox/Security Bypass
         CONFIG_TIMA=n
-        CONFIG_TIMA_LKMAUTH=n
-        CONFIG_TIMA_LKM_BLOCK=n
-        CONFIG_TIMA_LKMAUTH_CODE_PROT=n
         CONFIG_UH=n
         CONFIG_UH_RKP=n
         CONFIG_RKP_KDP=n
-        CONFIG_RKP_NS_PROT=n
-        CONFIG_RKP_DMAP_PROT=n
-        CONFIG_TIMA_LOG=n
-        CONFIG_KNOX_KAP=n
-        CONFIG_DM_VERITY=n
+        CONFIG_SECURITY_DEFEX=n
         CONFIG_SEC_RESTRICT_ROOTING=n
         CONFIG_SEC_RESTRICT_SETUID=n
         CONFIG_SEC_RESTRICT_FORK=n
-        CONFIG_SEC_RESTRICT_ROOTING_LOG=n
-        CONFIG_INTEGRITY=n
-        CONFIG_INTEGRITY_SIGNATURE=y
-        CONFIG_INTEGRITY_ASYMMETRIC_KEYS=n
-        CONFIG_INTEGRITY_TRUSTED_KEYRING=y
-        CONFIG_INTEGRITY_AUDIT=n
+        CONFIG_PROCA=n
         CONFIG_SECURITY_DSMS=n
-        CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE=y
-        CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE_O3_OFAST_SUB_OPTIONS=y
-        CONFIG_CC_OPTIMIZE_FOR_SIZE=n
-        CONFIG_KNOX_NCM=n
-        CONFIG_ZRAM=y
-        CONFIG_ZRAM_WRITEBACK=y
-        CONFIG_ZRAM_MEMORY_TRACKING=y
-        CONFIG_CRYPTO_LZO=n
-        CONFIG_CRYPTO_LZ4=y
-        CONFIG_KERNEL_GZIP=y
-        CONFIG_MODULE_FORCE_LOAD=y
-        CONFIG_MODULE_UNLOAD=y
-        CONFIG_MODULE_FORCE_UNLOAD=y
-        CONFIG_FIVE=n
+        CONFIG_DM_VERITY=n
+        CONFIG_KNOX_KAP=n
+        
+        # Kernel Optimization
+        CONFIG_LOCALVERSION="-Khalifa-A35"
+        CONFIG_CC_WERROR=n
         EOF
-        echo "Custom config options applied."
 
-    - name: Setup ccache
-      if: env.ENABLE_CCACHE == 'true'
-      uses: hendrikmuhs/ccache-action@v1.2
-      with:
-        key: build-kernel-${{ env.DEVICE }}${{ env.UPLOADNAME }}
-        max-size: 2G
-
-    - name: Build kernel
+    - name: Build Kernel
       run: |
-        cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
+        cd kernel_workspace/android-kernel
         export PATH=$GITHUB_WORKSPACE/kernel_workspace/clang/bin:$PATH
         export KBUILD_BUILD_HOST=${{ env.BUILDER_HOST }}
-        export KBUILD_BUILD_USER=$(echo ${{ github.actor }} | tr A-Z a-z)
-        if [ ! -z "${{ env.KSU_EXPECTED_SIZE }}" ] && [ ! -z "${{ env.KSU_EXPECTED_HASH }}" ]; then
-          export KSU_EXPECTED_SIZE=${{ env.KSU_EXPECTED_SIZE }}
-          export KSU_EXPECTED_HASH=${{ env.KSU_EXPECTED_HASH }}
-        fi
-        if [ "${{ env.ENABLE_CLANG }}" = "true" ]; then
-          make -j$(nproc --all) CC=clang O=out ARCH=${{ env.ARCH }} ${{ env.TC_CUSTOM_CMDS }} ${{ env.EXTRA_CMDS }} ${{ env.GCC_64 }} ${{ env.GCC_32 }} ${{ env.KERNEL_CONFIG }}
-          if [ "${{ env.ENABLE_CCACHE }}" = "true" ]; then
-            make -j$(nproc --all) CC="ccache clang" O=out ARCH=${{ env.ARCH }} ${{ env.TC_CUSTOM_CMDS }} ${{ env.EXTRA_CMDS }} ${{ env.GCC_64 }} ${{ env.GCC_32 }}
-          else
-            make -j$(nproc --all) CC=clang O=out ARCH=${{ env.ARCH }} ${{ env.TC_CUSTOM_CMDS }} ${{ env.EXTRA_CMDS }} ${{ env.GCC_64 }} ${{ env.GCC_32 }}
-          fi
-        else
-          make -j$(nproc --all) CC=gcc O=out ARCH=${{ env.ARCH }} ${{ env.TC_CUSTOM_CMDS }} ${{ env.EXTRA_CMDS }} ${{ env.GCC_64 }} ${{ env.GCC_32 }} ${{ env.KERNEL_CONFIG }}
-          if [ "${{ env.ENABLE_CCACHE }}" = "true" ]; then
-            make -j$(nproc --all) CC="ccache gcc" O=out ARCH=${{ env.ARCH }} ${{ env.TC_CUSTOM_CMDS }} ${{ env.EXTRA_CMDS }} ${{ env.GCC_64 }} ${{ env.GCC_32 }}
-          else
-            make -j$(nproc --all) CC=gcc O=out ARCH=${{ env.ARCH }} ${{ env.TC_CUSTOM_CMDS }} ${{ env.EXTRA_CMDS }} ${{ env.GCC_64 }} ${{ env.GCC_32 }}
-          fi
-        fi
+        export KBUILD_BUILD_USER=${{ github.actor }}
+        
+        # بدء عملية البناء
+        make -j$(nproc --all) CC=clang O=out ARCH=${{ env.ARCH }} ${{ env.TC_CUSTOM_CMDS }} ${{ env.EXTRA_CMDS }} ${{ env.KERNEL_CONFIG }}
+        make -j$(nproc --all) CC=clang O=out ARCH=${{ env.ARCH }} ${{ env.TC_CUSTOM_CMDS }} ${{ env.EXTRA_CMDS }}
 
-    - name: Check kernel compilation product
-      run: |
-       cd $GITHUB_WORKSPACE/kernel_workspace
-       if [ -f android-kernel/out/arch/${{ env.ARCH }}/boot/${{ env.KERNEL_IMAGE_NAME }} ]; then
-           echo "CHECK_FILE_IS_OK=true" >> $GITHUB_ENV
-       else
-           echo "Kernel output file is empty or broken."
-           exit 1
-       fi
-       if [ "${{ env.NEED_DTBO }}" = "true" ]; then
-           if [ -f android-kernel/out/arch/${{ env.ARCH }}/boot/dtbo.img ]; then
-               echo "CHECK_DTBO_IS_OK=true" >> $GITHUB_ENV
-           else
-               echo "DTBO image is empty or broken."
-               exit 1
-           fi
-       fi
-
-    - name: Download stock boot image (for custom boot.img)
-      if: env.BUILD_BOOT_IMG == 'true' && env.BOOT_IMAGE_SOURCE != ''
-      run: |
-        cd $GITHUB_WORKSPACE/kernel_workspace
-        mkdir -p boot_img
-        BOOT_URL="${{ env.BOOT_IMAGE_SOURCE }}"
-        if [[ "$BOOT_URL" =~ drive.google.com ]]; then
-            FILE_ID=$(echo "$BOOT_URL" | grep -oP '(?<=/d/)[^/]+' | head -1)
-            echo "Downloading boot.img from Google Drive (ID: $FILE_ID)"
-            gdown --fuzzy "https://drive.google.com/file/d/$FILE_ID/view" -O boot_img/stock_boot.img
-        else
-            wget -O boot_img/stock_boot.img "$BOOT_URL"
-        fi
-        echo "STOCK_BOOT_IMG_PATH=$GITHUB_WORKSPACE/kernel_workspace/boot_img/stock_boot.img" >> $GITHUB_ENV
-
-    - name: Setup magiskboot for boot.img repack
-      if: env.BUILD_BOOT_IMG == 'true'
-      run: |
-        cd $GITHUB_WORKSPACE/kernel_workspace
-        mkdir -p tools
-        if [ ! -f tools/magiskboot ]; then
-          wget -O tools/magiskboot https://github.com/topjohnwu/magisk-binaries/raw/master/magiskboot-26.1
-          chmod +x tools/magiskboot
-        fi
-
-    - name: Repack boot.img with new kernel
-      if: env.BUILD_BOOT_IMG == 'true' && env.CHECK_FILE_IS_OK == 'true' && env.BOOT_IMAGE_SOURCE != ''
-      run: |
-        cd $GITHUB_WORKSPACE/kernel_workspace
-        mkdir -p boot_work
-        cp $STOCK_BOOT_IMG_PATH boot_work/boot.img
-        cd boot_work
-        ../tools/magiskboot unpack boot.img
-        cp ../android-kernel/out/arch/${{ env.ARCH }}/boot/${{ env.KERNEL_IMAGE_NAME }} ./kernel
-        ../tools/magiskboot repack boot.img new-boot.img
-        cp new-boot.img ../boot-custom.img
-        echo "BOOT_IMG_OUT=$GITHUB_WORKSPACE/kernel_workspace/boot-custom.img" >> $GITHUB_ENV
-        echo "BOOT_IMG_BUILT=true" >> $GITHUB_ENV
-  
     - name: Setup AnyKernel3
-      if: env.CHECK_FILE_IS_OK == 'true'
       run: |
-        cd $GITHUB_WORKSPACE/kernel_workspace
+        cd kernel_workspace
         git clone https://github.com/osm0sis/AnyKernel3.git
         cp android-kernel/out/arch/${{ env.ARCH }}/boot/${{ env.KERNEL_IMAGE_NAME }} AnyKernel3/
         cd AnyKernel3
         sed -i 's/do.devicecheck=1/do.devicecheck=0/g' anykernel.sh
-        sed -i 's!block=/dev/block/platform/omap/omap_hsmmc.0/by-name/boot;!block=auto;!g' anykernel.sh
-        sed -i 's/is_slot_device=0;/is_slot_device=auto;/g' anykernel.sh
-        zip -r9 AnyKernel3.zip * -x .git README.md
-        mv AnyKernel3.zip $GITHUB_WORKSPACE/
-        echo "AK3_IS_OK=true" >> $GITHUB_ENV
+        zip -r9 ../../AnyKernel3-A35-KSU.zip *
 
-    - name: Setup KernelSU boot image (legacy)
-      if: env.HAVE_KERNELSU_SOURCE_BOOT_IMAGE == 'true' && env.CHECK_FILE_IS_OK == 'true'
-      run: |
-        cd $GITHUB_WORKSPACE/kernel_workspace
-        chmod +x ./tools/magiskboot
-        cd bootimg_tmp
-        mkdir source kernelbuild
-        cd source
-        $GITHUB_WORKSPACE/kernel_workspace/tools/magiskboot unpack ${{env.SOURCE_KERNELSU_BOOTIMG_PATH}}
-        cd ..
-        cp -r ./source ./new
-        if [ "${{ env.KERNEL_IMAGE_NAME }}" = "Image.gz-dtb" ]; then
-          cd $GITHUB_WORKSPACE/kernel_workspace/bootimg_tmp/kernelbuild
-          $GITHUB_WORKSPACE/kernel_workspace/tools/magiskboot split $GITHUB_WORKSPACE/kernel_workspace/android-kernel/out/arch/${{ env.ARCH }}/boot/${{ env.KERNEL_IMAGE_NAME }}
-          cp -rf kernel $GITHUB_WORKSPACE/kernel_workspace/bootimg_tmp/new/
-          cp -rf kernel_dtb $GITHUB_WORKSPACE/kernel_workspace/bootimg_tmp/new/
-          cd $GITHUB_WORKSPACE/kernel_workspace/bootimg_tmp/new/
-          $GITHUB_WORKSPACE/kernel_workspace/tools/magiskboot repack ${{env.SOURCE_KERNELSU_BOOTIMG_PATH}} $GITHUB_WORKSPACE/kernel_workspace/bootimg_tmp/boot-kernelsu.img
-        else
-          cd $GITHUB_WORKSPACE/kernel_workspace/bootimg_tmp/new/
-          cp -rf $GITHUB_WORKSPACE/kernel_workspace/android-kernel/out/arch/${{ env.ARCH }}/boot/${{ env.KERNEL_IMAGE_NAME }} ./kernel
-          $GITHUB_WORKSPACE/kernel_workspace/tools/magiskboot repack ${{env.SOURCE_KERNELSU_BOOTIMG_PATH}} $GITHUB_WORKSPACE/kernel_workspace/bootimg_tmp/boot-kernelsu.img
-        fi
-        cd $GITHUB_WORKSPACE/kernel_workspace/bootimg_tmp
-        if [ -f boot-kernelsu.img ]; then
-            echo "MAKE_KERNELSU_BOOT_IMAGE_IS_OK=true" >> $GITHUB_ENV
-        else
-            echo "KernelSU Boot image is broken."
-            exit 1
-        fi
-
-    - name: Upload kernel image (Image)
-      if: env.CHECK_FILE_IS_OK == 'true'
+    - name: Upload Artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: ${{ env.KERNEL_IMAGE_NAME }}${{ env.UPLOADNAME }}-${{ env.DEVICE }}-${{ env.BUILD_TIME }}
-        path: kernel_workspace/android-kernel/out/arch/${{ env.ARCH }}/boot/${{ env.KERNEL_IMAGE_NAME }}
-        if-no-files-found: error
-
-    - name: Upload AnyKernel3 package
-      if: env.CHECK_FILE_IS_OK == 'true' && env.AK3_IS_OK == 'true'
-      uses: actions/upload-artifact@v4
-      with:
-        name: AnyKernel3${{ env.UPLOADNAME }}-${{ env.DEVICE }}-${{ env.BUILD_TIME }}
-        path: AnyKernel3.zip
-        if-no-files-found: error
-
-    - name: Upload DTBO image
-      if: env.CHECK_DTBO_IS_OK == 'true'
-      uses: actions/upload-artifact@v4
-      with:
-        name: dtbo-${{ env.DEVICE }}-${{ env.BUILD_TIME }}
-        path: kernel_workspace/android-kernel/out/arch/${{ env.ARCH }}/boot/dtbo.img
-        if-no-files-found: error
-
-    - name: Upload KernelSU boot image (legacy)
-      if: env.MAKE_KERNELSU_BOOT_IMAGE_IS_OK == 'true'
-      uses: actions/upload-artifact@v4
-      with:
-        name: boot${{ env.UPLOADNAME }}-${{ env.DEVICE }}-${{ env.BUILD_TIME }}
-        path: kernel_workspace/bootimg_tmp/boot-kernelsu.img
-        if-no-files-found: error
-
-    - name: Upload custom boot.img (new method)
-      if: env.BOOT_IMG_BUILT == 'true'
-      uses: actions/upload-artifact@v4
-      with:
-        name: boot-custom-${{ env.DEVICE }}-${{ env.BUILD_TIME }}
-        path: kernel_workspace/boot-custom.img
-        if-no-files-found: error
-
-    - name: Release
-      uses: softprops/action-gh-release@master
-      if: github.event.inputs.release == 'true'
-      with:
-        tag_name: Build-${{ env.DEVICE }}-${{ env.BUILD_TIME }}
-        draft: false
-        prerelease: false
-        files: |
-          kernel_workspace/android-kernel/out/arch/${{ env.ARCH }}/boot/${{ env.KERNEL_IMAGE_NAME }}
-          AnyKernel3.zip
-          kernel_workspace/android-kernel/out/arch/${{ env.ARCH }}/boot/dtbo.img
-          kernel_workspace/bootimg_tmp/boot-kernelsu.img
-          kernel_workspace/boot-custom.img
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        name: Kernel-A35-KSU-${{ env.BUILD_TIME }}
+        path: AnyKernel3-A35-KSU.zip
